@@ -11,7 +11,7 @@ export async function runAppleScript(script: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync("osascript", ["-e", script], {
       maxBuffer: 10 * 1024 * 1024, // 10MB — articles can be large
-      timeout: 30_000,
+      timeout: 60_000, // Increased from 30s to accommodate large iCloud libraries
     });
     return stdout.trim();
   } catch (error: unknown) {

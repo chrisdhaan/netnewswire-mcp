@@ -14,7 +14,8 @@
 export const scripts = {
   /**
    * List all accounts with their feeds and folders.
-   * Uses `allFeeds` (the sdef property) for top-level feed enumeration.
+   * Uses `every feed of acct` for true top-level feeds only (not allFeeds,
+   * which on iCloud accounts includes folder feeds and causes duplication).
    */
   listFeeds: (accountName?: string) => {
     const accountFilter = accountName
@@ -28,8 +29,8 @@ tell application "NetNewsWire"
     set acctActive to active of acct
     set output to output & "ACCOUNT:" & acctName & "|" & acctActive & linefeed
 
-    -- Top-level feeds (not in folders)
-    repeat with f in allFeeds of acct
+    -- Top-level feeds only (not inside folders)
+    repeat with f in every feed of acct
       set fName to name of f
       set fUrl to url of f
       set fHome to ""
@@ -155,13 +156,19 @@ end tell`;
 
   /**
    * Read the full content of a specific article by ID.
+   * Exits all loops immediately once the article is found.
    */
   readArticle: (articleId: string) => `
 tell application "NetNewsWire"
+  set found to false
   repeat with acct in every account
+    if found then exit repeat
     repeat with nthFeed in allFeeds of acct
+      if found then exit repeat
       repeat with a in every article of nthFeed
+        if found then exit repeat
         if id of a is "${escapeForAppleScript(articleId)}" then
+          set found to true
           set aTitle to ""
           try
             set aTitle to title of a
@@ -205,6 +212,8 @@ end tell`,
 
   /**
    * Mark articles as read/unread or starred/unstarred.
+   * Exits all loops as soon as all requested articles have been found,
+   * preventing timeouts on large libraries.
    */
   markArticles: (
     articleIds: string[],
@@ -215,12 +224,17 @@ end tell`,
     const idChecks = articleIds
       .map((id) => `id of a is "${escapeForAppleScript(id)}"`)
       .join(" or ");
+    const totalIds = articleIds.length;
     return `
 tell application "NetNewsWire"
   set matchCount to 0
+  set totalNeeded to ${totalIds}
   repeat with acct in every account
+    if matchCount ≥ totalNeeded then exit repeat
     repeat with nthFeed in allFeeds of acct
+      if matchCount ≥ totalNeeded then exit repeat
       repeat with a in every article of nthFeed
+        if matchCount ≥ totalNeeded then exit repeat
         if ${idChecks} then
           set ${property} of a to ${value}
           set matchCount to matchCount + 1
@@ -258,20 +272,12 @@ end tell`;
   },
 
   /**
-   * Search articles by keyword in title and contents.
+   * Search articles by keyword in title and contents across all feeds,
+   * including feeds inside folders.
    */
   searchArticles: (query: string, limit?: number) => {
     const maxResults = limit ?? 20;
-    return `
-tell application "NetNewsWire"
-  set output to ""
-  set matchCount to 0
-  set maxResults to ${maxResults}
-  set searchTerm to "${escapeForAppleScript(query)}"
-  repeat with acct in every account
-    if matchCount ≥ maxResults then exit repeat
-    repeat with nthFeed in allFeeds of acct
-      if matchCount ≥ maxResults then exit repeat
+    const articleBlock = `
       repeat with a in every article of nthFeed
         if matchCount ≥ maxResults then exit repeat
         set aTitle to ""
@@ -298,6 +304,29 @@ tell application "NetNewsWire"
           set output to output & "ARTICLE:" & aId & "|" & aTitle & "|" & aUrl & "|" & isRead & "|" & isStarred & "|" & aDate & "|" & aFeed & linefeed
           set matchCount to matchCount + 1
         end if
+      end repeat`;
+
+    return `
+tell application "NetNewsWire"
+  set output to ""
+  set matchCount to 0
+  set maxResults to ${maxResults}
+  set searchTerm to "${escapeForAppleScript(query)}"
+  repeat with acct in every account
+    if matchCount ≥ maxResults then exit repeat
+
+    -- Search top-level feeds
+    repeat with nthFeed in allFeeds of acct
+      if matchCount ≥ maxResults then exit repeat
+${articleBlock}
+    end repeat
+
+    -- Search feeds inside folders
+    repeat with fld in every folder of acct
+      if matchCount ≥ maxResults then exit repeat
+      repeat with nthFeed in every feed of fld
+        if matchCount ≥ maxResults then exit repeat
+${articleBlock}
       end repeat
     end repeat
   end repeat
