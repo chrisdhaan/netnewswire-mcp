@@ -156,68 +156,99 @@ end tell`;
 
   /**
    * Read the full content of a specific article by ID.
-   * Exits all loops immediately once the article is found.
+   * Accepts an optional folderName hint to scope the search to a single folder,
+   * avoiding full-library scans that time out on large iCloud libraries.
    */
-  readArticle: (articleId: string) => `
-tell application "NetNewsWire"
-  set found to false
+  readArticle: (articleId: string, folderName?: string) => {
+    const idCheck = `"${escapeForAppleScript(articleId)}"`;
+    const returnBlock = `
+            set aTitle to ""
+            try
+              set aTitle to title of a
+            end try
+            set aUrl to ""
+            try
+              set aUrl to url of a
+            end try
+            set aHtml to ""
+            try
+              set aHtml to html of a
+            end try
+            set aText to ""
+            try
+              set aText to contents of a
+            end try
+            set aSummary to ""
+            try
+              set aSummary to summary of a
+            end try
+            set aDate to ""
+            try
+              set aDate to published date of a as string
+            end try
+            set aRead to read of a
+            set aStarred to starred of a
+            set aFeed to name of feed of a
+            set aAuthors to ""
+            try
+              repeat with auth in every author of a
+                set aAuthors to aAuthors & name of auth & ", "
+              end repeat
+            end try
+            return "TITLE:" & aTitle & linefeed & "URL:" & aUrl & linefeed & "FEED:" & aFeed & linefeed & "DATE:" & aDate & linefeed & "READ:" & aRead & linefeed & "STARRED:" & aStarred & linefeed & "AUTHORS:" & aAuthors & linefeed & "SUMMARY:" & aSummary & linefeed & "HTML:" & aHtml & linefeed & "TEXT:" & aText`;
+
+    const feedIteration = folderName
+      ? `
   repeat with acct in every account
-    if found then exit repeat
-    repeat with nthFeed in allFeeds of acct
-      if found then exit repeat
+    repeat with fld in every folder of acct
+      if name of fld is "${escapeForAppleScript(folderName)}" then
+        repeat with nthFeed in every feed of fld
+          repeat with a in every article of nthFeed
+            if id of a is ${idCheck} then
+${returnBlock}
+            end if
+          end repeat
+        end repeat
+      end if
+    end repeat
+  end repeat`
+      : `
+  repeat with acct in every account
+    repeat with nthFeed in every feed of acct
       repeat with a in every article of nthFeed
-        if found then exit repeat
-        if id of a is "${escapeForAppleScript(articleId)}" then
-          set found to true
-          set aTitle to ""
-          try
-            set aTitle to title of a
-          end try
-          set aUrl to ""
-          try
-            set aUrl to url of a
-          end try
-          set aHtml to ""
-          try
-            set aHtml to html of a
-          end try
-          set aText to ""
-          try
-            set aText to contents of a
-          end try
-          set aSummary to ""
-          try
-            set aSummary to summary of a
-          end try
-          set aDate to ""
-          try
-            set aDate to published date of a as string
-          end try
-          set aRead to read of a
-          set aStarred to starred of a
-          set aFeed to name of feed of a
-          set aAuthors to ""
-          try
-            repeat with auth in every author of a
-              set aAuthors to aAuthors & name of auth & ", "
-            end repeat
-          end try
-          return "TITLE:" & aTitle & linefeed & "URL:" & aUrl & linefeed & "FEED:" & aFeed & linefeed & "DATE:" & aDate & linefeed & "READ:" & aRead & linefeed & "STARRED:" & aStarred & linefeed & "AUTHORS:" & aAuthors & linefeed & "SUMMARY:" & aSummary & linefeed & "HTML:" & aHtml & linefeed & "TEXT:" & aText
+        if id of a is ${idCheck} then
+${returnBlock}
         end if
       end repeat
     end repeat
-  end repeat
+    repeat with fld in every folder of acct
+      repeat with nthFeed in every feed of fld
+        repeat with a in every article of nthFeed
+          if id of a is ${idCheck} then
+${returnBlock}
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end repeat`;
+
+    return `
+tell application "NetNewsWire"
+${feedIteration}
   return "ERROR:Article not found"
-end tell`,
+end tell`;
+  },
 
   /**
    * Mark articles as read/unread or starred/unstarred.
-   * Exits all loops as soon as all requested articles have been found,
-   * preventing timeouts on large libraries.
+   * Accepts an optional folderName hint to scope the search to a single folder,
+   * avoiding full-library scans that time out on large iCloud libraries.
+   * Falls back to full traversal when no hint is provided.
    */
   markArticles: (
     articleIds: string[],
-    action: "read" | "unread" | "starred" | "unstarred"
+    action: "read" | "unread" | "starred" | "unstarred",
+    folderName?: string
   ) => {
     const property = action === "read" || action === "unread" ? "read" : "starred";
     const value = action === "read" || action === "starred" ? "true" : "false";
@@ -225,23 +256,51 @@ end tell`,
       .map((id) => `id of a is "${escapeForAppleScript(id)}"`)
       .join(" or ");
     const totalIds = articleIds.length;
+
+    const articleLoop = `
+        repeat with a in every article of nthFeed
+          if matchCount >= totalNeeded then exit repeat
+          if ${idChecks} then
+            set ${property} of a to ${value}
+            set matchCount to matchCount + 1
+          end if
+        end repeat`;
+
+    const feedIteration = folderName
+      ? `
+  repeat with acct in every account
+    if matchCount >= totalNeeded then exit repeat
+    repeat with fld in every folder of acct
+      if matchCount >= totalNeeded then exit repeat
+      if name of fld is "${escapeForAppleScript(folderName)}" then
+        repeat with nthFeed in every feed of fld
+          if matchCount >= totalNeeded then exit repeat
+${articleLoop}
+        end repeat
+      end if
+    end repeat
+  end repeat`
+      : `
+  repeat with acct in every account
+    if matchCount >= totalNeeded then exit repeat
+    repeat with nthFeed in every feed of acct
+      if matchCount >= totalNeeded then exit repeat
+${articleLoop}
+    end repeat
+    repeat with fld in every folder of acct
+      if matchCount >= totalNeeded then exit repeat
+      repeat with nthFeed in every feed of fld
+        if matchCount >= totalNeeded then exit repeat
+${articleLoop}
+      end repeat
+    end repeat
+  end repeat`;
+
     return `
 tell application "NetNewsWire"
   set matchCount to 0
   set totalNeeded to ${totalIds}
-  repeat with acct in every account
-    if matchCount ≥ totalNeeded then exit repeat
-    repeat with nthFeed in allFeeds of acct
-      if matchCount ≥ totalNeeded then exit repeat
-      repeat with a in every article of nthFeed
-        if matchCount ≥ totalNeeded then exit repeat
-        if ${idChecks} then
-          set ${property} of a to ${value}
-          set matchCount to matchCount + 1
-        end if
-      end repeat
-    end repeat
-  end repeat
+${feedIteration}
   return "MARKED:" & matchCount
 end tell`;
   },
@@ -371,6 +430,32 @@ tell application "NetNewsWire"
   set aStarred to starred of a
   set aFeed to name of feed of a
   return "TITLE:" & aTitle & linefeed & "URL:" & aUrl & linefeed & "FEED:" & aFeed & linefeed & "DATE:" & aDate & linefeed & "READ:" & aRead & linefeed & "STARRED:" & aStarred & linefeed & "SUMMARY:" & aSummary & linefeed & "HTML:" & aHtml & linefeed & "TEXT:" & aText
+end tell`,
+
+  /**
+   * Mark all articles in a folder as read in NetNewsWire.
+   * Iterates articles individually — NNW does not support bulk
+   * `set every article whose read is false to read` syntax.
+   */
+  markFolderRead: (folderName: string) => `
+tell application "NetNewsWire"
+  set articleCount to 0
+  repeat with acct in every account
+    repeat with fld in every folder of acct
+      if name of fld is "${escapeForAppleScript(folderName)}" then
+        repeat with nthFeed in every feed of fld
+          repeat with a in every article of nthFeed
+            if read of a is false then
+              set read of a to true
+              set articleCount to articleCount + 1
+            end if
+          end repeat
+        end repeat
+        exit repeat
+      end if
+    end repeat
+  end repeat
+  return "MARKED_READ:" & articleCount & " articles"
 end tell`,
 } as const;
 

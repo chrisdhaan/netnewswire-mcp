@@ -86,10 +86,14 @@ function registerTools(server: McpServer): void {
     "Get the full content of a specific article by its ID. Returns title, HTML content, plain text, summary, and metadata.",
     {
       articleId: z.string().describe("The article ID to read"),
+      folderName: z
+        .string()
+        .optional()
+        .describe("Folder the article belongs to (speeds up lookup on large libraries)"),
     },
-    async ({ articleId }) => {
+    async ({ articleId, folderName }) => {
       await ensureRunning();
-      const raw = await runAppleScript(scripts.readArticle(articleId));
+      const raw = await runAppleScript(scripts.readArticle(articleId, folderName));
       if (raw.startsWith("ERROR:")) {
         return {
           content: [{ type: "text", text: raw.substring(6) }],
@@ -113,10 +117,14 @@ function registerTools(server: McpServer): void {
       action: z
         .enum(["read", "unread", "starred", "unstarred"])
         .describe("Action to perform"),
+      folderName: z
+        .string()
+        .optional()
+        .describe("Folder the articles belong to (speeds up lookup on large libraries)"),
     },
-    async ({ articleIds, action }) => {
+    async ({ articleIds, action, folderName }) => {
       await ensureRunning();
-      const raw = await runAppleScript(scripts.markArticles(articleIds, action));
+      const raw = await runAppleScript(scripts.markArticles(articleIds, action, folderName));
       const count = raw.match(/MARKED:(\d+)/)?.[1] ?? "0";
       return {
         content: [
@@ -181,6 +189,20 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
+    }
+  );
+
+  // ── mark_folder_read ─────────────────────────────────────────────
+  server.tool(
+    "mark_folder_read",
+    "Mark all articles in a folder as read.",
+    {
+      folderName: z.string().describe("The folder name to mark as read"),
+    },
+    async ({ folderName }) => {
+      await ensureRunning();
+      const raw = await runAppleScript(scripts.markFolderRead(folderName));
+      return { content: [{ type: "text", text: raw }] };
     }
   );
 }
