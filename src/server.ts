@@ -195,45 +195,17 @@ function registerTools(server: McpServer): void {
   // ── mark_folder_read ─────────────────────────────────────────────
   server.tool(
     "mark_folder_read",
-    "Mark all articles in a folder as read. Automatically batches to handle large folders without timing out.",
+    "Mark all articles in every folder as read in one shot by selecting the 'All Unread' smart feed and triggering Article > Mark All as Read via UI scripting. The folderName parameter is accepted for API compatibility but ignored — this always marks the entire library.",
     {
-      folderName: z.string().describe("The folder name to mark as read"),
+      folderName: z.string().describe("Accepted for compatibility but ignored — marks all unread articles across all folders."),
     },
-    async ({ folderName }) => {
+    async ({ folderName: _folderName }) => {
       await ensureRunning();
-      const BATCH_SIZE = 25; // small enough to stay well under the 60s AppleScript timeout
-      let totalMarked = 0;
-      let iterations = 0;
-      const MAX_ITERATIONS = 800; // safety cap: 800 * 25 = 20,000 articles
-
-      while (iterations < MAX_ITERATIONS) {
-        // Fetch next batch of unread IDs from this folder
-        const idsRaw = await runAppleScript(
-          scripts.getFolderUnreadIds(folderName, BATCH_SIZE)
-        );
-        const ids = idsRaw
-          .split("\n")
-          .map((l: string) => l.trim())
-          .filter((l: string) => l.length > 0);
-
-        if (ids.length === 0) break; // folder is fully read
-
-        // Mark this batch read
-        const markRaw = await runAppleScript(
-          scripts.markFolderReadBatch(ids, folderName)
-        );
-        const count = parseInt(markRaw.match(/MARKED_READ:(\d+)/)?.[1] ?? "0", 10);
-        totalMarked += count;
-        iterations++;
-
-        // If we got fewer IDs than the batch size, we're done
-        if (ids.length < BATCH_SIZE) break;
-      }
-
+      await runAppleScript(scripts.markAllUnread());
       return {
         content: [{
           type: "text",
-          text: `Marked ${totalMarked} articles as read in "${folderName}" (${iterations} batch${iterations === 1 ? "" : "es"}).`,
+          text: `Marked all articles as read via Article > Mark All as Read.`,
         }],
       };
     }

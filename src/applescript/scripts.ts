@@ -503,6 +503,22 @@ tell application "NetNewsWire"
   return "MARKED_READ:" & matchCount
 end tell`;
   },
+  /**
+   * Mark all articles as read by selecting the "All Unread" smart feed
+   * (row 3 in the sidebar) and triggering Article > Mark All as Read
+   * via UI scripting. Instant regardless of library size — no iteration.
+   */
+  markAllUnread: () => `
+tell application "NetNewsWire" to activate
+delay 0.5
+tell application "System Events"
+  tell process "NetNewsWire"
+    click row 3 of outline 1 of scroll area 1 of splitter group 1 of window 1
+    delay 1
+    click menu item "Mark All as Read" of menu "Article" of menu bar 1
+  end tell
+end tell
+return "OK"`,
 } as const;
 
 function escapeForAppleScript(str: string): string {
