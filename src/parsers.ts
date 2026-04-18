@@ -72,7 +72,9 @@ export function parseArticles(raw: string): ArticleSummary[] {
   const articles: ArticleSummary[] = [];
   for (const line of raw.split("\n")) {
     if (!line.startsWith("ARTICLE:")) continue;
-    const parts = line.substring(8).split("|");
+    // Use ASCII unit separator (0x1F) as delimiter to avoid collisions with
+    // pipe characters that may appear in article titles, URLs, or summaries.
+    const parts = line.substring(8).split("\x1f");
     articles.push({
       id: parts[0] ?? "",
       title: parts[1] ?? "",

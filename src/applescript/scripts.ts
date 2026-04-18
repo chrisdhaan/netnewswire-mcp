@@ -104,7 +104,8 @@ end tell`;
           set aFeed to name of feed of a
           set isRead to read of a
           set isStarred to starred of a
-          set output to output & "ARTICLE:" & aId & "|" & aTitle & "|" & aUrl & "|" & isRead & "|" & isStarred & "|" & aDate & "|" & aFeed & "|" & aSummary & linefeed
+          set sep to (ASCII character 31)
+          set output to output & "ARTICLE:" & aId & sep & aTitle & sep & aUrl & sep & isRead & sep & isStarred & sep & aDate & sep & aFeed & sep & aSummary & linefeed
           set articleCount to articleCount + 1
         end repeat`;
 
@@ -158,6 +159,7 @@ end tell`;
    * Read the full content of a specific article by ID.
    * Accepts an optional folderName hint to scope the search to a single folder,
    * avoiding full-library scans that time out on large iCloud libraries.
+   * Falls back to full traversal when no hint is provided.
    */
   readArticle: (articleId: string, folderName?: string) => {
     const idCheck = `"${escapeForAppleScript(articleId)}"`;
@@ -360,7 +362,8 @@ end tell`;
           set aFeed to name of feed of a
           set isRead to read of a
           set isStarred to starred of a
-          set output to output & "ARTICLE:" & aId & "|" & aTitle & "|" & aUrl & "|" & isRead & "|" & isStarred & "|" & aDate & "|" & aFeed & linefeed
+          set sep to (ASCII character 31)
+          set output to output & "ARTICLE:" & aId & sep & aTitle & sep & aUrl & sep & isRead & sep & isStarred & sep & aDate & sep & aFeed & linefeed
           set matchCount to matchCount + 1
         end if
       end repeat`;
@@ -433,21 +436,26 @@ tell application "NetNewsWire"
 end tell`,
 
   /**
-   * Mark all articles in a folder as read in NetNewsWire.
-   * Iterates articles individually — NNW does not support bulk
-   * `set every article whose read is false to read` syntax.
+   * Fetch up to `limit` unread article IDs from a specific folder.
+   * Used by the batching loop in server.ts to drive mark-folder-read.
    */
-  markFolderRead: (folderName: string) => `
+  getFolderUnreadIds: (folderName: string, limit: number) => `
 tell application "NetNewsWire"
-  set articleCount to 0
+  set output to ""
+  set idCount to 0
+  set maxIds to ${limit}
   repeat with acct in every account
+    if idCount >= maxIds then exit repeat
     repeat with fld in every folder of acct
+      if idCount >= maxIds then exit repeat
       if name of fld is "${escapeForAppleScript(folderName)}" then
         repeat with nthFeed in every feed of fld
+          if idCount >= maxIds then exit repeat
           repeat with a in every article of nthFeed
+            if idCount >= maxIds then exit repeat
             if read of a is false then
-              set read of a to true
-              set articleCount to articleCount + 1
+              set output to output & id of a & linefeed
+              set idCount to idCount + 1
             end if
           end repeat
         end repeat
@@ -455,8 +463,46 @@ tell application "NetNewsWire"
       end if
     end repeat
   end repeat
-  return "MARKED_READ:" & articleCount & " articles"
+  return output
 end tell`,
+
+  /**
+   * Mark a specific list of article IDs as read, scoped to a folder.
+   * Designed for use in a batching loop — keep batch sizes small (<=200)
+   * to stay well within the 60s AppleScript timeout.
+   */
+  markFolderReadBatch: (articleIds: string[], folderName: string) => {
+    const totalIds = articleIds.length;
+    const idChecks = articleIds
+      .map((id) => `aId is "${escapeForAppleScript(id)}"`)
+      .join(" or ");
+    return `
+tell application "NetNewsWire"
+  set matchCount to 0
+  set totalNeeded to ${totalIds}
+  repeat with acct in every account
+    if matchCount >= totalNeeded then exit repeat
+    repeat with fld in every folder of acct
+      if matchCount >= totalNeeded then exit repeat
+      if name of fld is "${escapeForAppleScript(folderName)}" then
+        repeat with nthFeed in every feed of fld
+          if matchCount >= totalNeeded then exit repeat
+          repeat with a in every article of nthFeed
+            if matchCount >= totalNeeded then exit repeat
+            set aId to id of a
+            if ${idChecks} then
+              set read of a to true
+              set matchCount to matchCount + 1
+            end if
+          end repeat
+        end repeat
+        exit repeat
+      end if
+    end repeat
+  end repeat
+  return "MARKED_READ:" & matchCount
+end tell`;
+  },
 } as const;
 
 function escapeForAppleScript(str: string): string {
