@@ -7,7 +7,7 @@ import { parseListFeeds, parseArticles, parseFullArticle } from "./parsers.js";
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "NetNewsWire",
-    version: "0.1.2",
+    version: "0.1.4",
   });
 
   registerTools(server);
@@ -86,14 +86,19 @@ function registerTools(server: McpServer): void {
     "Get the full content of a specific article by its ID. Returns title, HTML content, plain text, summary, and metadata.",
     {
       articleId: z.string().describe("The article ID to read"),
-      folderName: z
-        .string()
-        .optional()
-        .describe("Folder the article belongs to (speeds up lookup on large libraries)"),
     },
-    async ({ articleId, folderName }) => {
+    async ({ articleId }) => {
       await ensureRunning();
-      const raw = await runAppleScript(scripts.readArticle(articleId, folderName));
+      // Cold-cache or missing-ID lookups walk every feed in every
+      // account, which can exceed the bridge's default 60s subprocess
+      // timeout on large libraries. The AppleScript itself caps
+      // individual Apple Events at 300s via `with timeout`, so the
+      // subprocess budget must match — otherwise Node kills osascript
+      // before the AppleScript-side -1712 re-raise can take effect.
+      const raw = await runAppleScript(
+        scripts.readArticle(articleId),
+        { timeoutMs: 300_000 }
+      );
       if (raw.startsWith("ERROR:")) {
         return {
           content: [{ type: "text", text: raw.substring(6) }],
@@ -108,23 +113,31 @@ function registerTools(server: McpServer): void {
   // ── mark_articles ───────────────────────────────────────────────
   server.tool(
     "mark_articles",
-    "Mark one or more articles as read, unread, starred, or unstarred.",
+    "Mark one or more articles as read, unread, starred, or unstarred. " +
+      "Prefer batching IDs into a single call (e.g. 50–200 per call) over many " +
+      "single-article calls — each call still has to scan feeds, so one batched " +
+      "call is dramatically cheaper than many sequential ones.",
     {
       articleIds: z
         .array(z.string())
         .min(1)
-        .describe("Array of article IDs to update"),
+        .max(200)
+        .describe(
+          "Array of article IDs to update (max 200 per call; for larger sets, split into multiple calls)"
+        ),
       action: z
         .enum(["read", "unread", "starred", "unstarred"])
         .describe("Action to perform"),
-      folderName: z
-        .string()
-        .optional()
-        .describe("Folder the articles belong to (speeds up lookup on large libraries)"),
     },
-    async ({ articleIds, action, folderName }) => {
+    async ({ articleIds, action }) => {
       await ensureRunning();
-      const raw = await runAppleScript(scripts.markArticles(articleIds, action, folderName));
+      // Write operations on large libraries can take longer than the default
+      // 60s subprocess timeout. The AppleScript itself caps individual Apple
+      // Events at 300s via `with timeout`, so match that here.
+      const raw = await runAppleScript(
+        scripts.markArticles(articleIds, action),
+        { timeoutMs: 300_000 }
+      );
       const count = raw.match(/MARKED:(\d+)/)?.[1] ?? "0";
       return {
         content: [
@@ -165,7 +178,7 @@ function registerTools(server: McpServer): void {
   // ── search_articles ─────────────────────────────────────────────
   server.tool(
     "search_articles",
-    "Search articles by keyword in titles and content across all feeds.",
+    "Search articles by keyword in titles and body content across all feeds.",
     {
       query: z.string().describe("Search keyword or phrase"),
       limit: z
@@ -177,7 +190,17 @@ function registerTools(server: McpServer): void {
     },
     async ({ query, limit }) => {
       await ensureRunning();
-      const raw = await runAppleScript(scripts.searchArticles(query, limit));
+      // Search across large libraries can take longer than the default 60s
+      // subprocess timeout, even with the whose-clause filter pushdown. The
+      // AppleScript itself wraps the iteration in `with timeout of 300 seconds`
+      // and re-raises -1712 as an actionable error; the subprocess cap must
+      // be ≥ that, otherwise Node kills osascript before the AppleScript-side
+      // error handling can fire and the caller sees the same misleading
+      // "Command failed: osascript -e <script>" shape as the original bug (#6).
+      const raw = await runAppleScript(
+        scripts.searchArticles(query, limit),
+        { timeoutMs: 300_000 }
+      );
       const articles = parseArticles(raw);
       return {
         content: [

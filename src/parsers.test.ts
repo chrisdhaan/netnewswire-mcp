@@ -64,9 +64,10 @@ describe("parseListFeeds", () => {
 
 describe("parseArticles", () => {
   it("parses article list", () => {
+    const sep = "\x1f";
     const raw = [
-      "ARTICLE:id-1|My Article|https://example.com/post|false|true|March 1, 2026|My Blog|A summary",
-      "ARTICLE:id-2|Another|https://example.com/other|true|false|March 2, 2026|Other Feed|",
+      `ARTICLE:id-1${sep}My Article${sep}https://example.com/post${sep}false${sep}true${sep}March 1, 2026${sep}My Blog${sep}A summary`,
+      `ARTICLE:id-2${sep}Another${sep}https://example.com/other${sep}true${sep}false${sep}March 2, 2026${sep}Other Feed${sep}`,
     ].join("\n");
 
     const result = parseArticles(raw);
@@ -95,7 +96,8 @@ describe("parseArticles", () => {
   });
 
   it("skips non-article lines", () => {
-    const raw = "some junk\nARTICLE:id|title|url|false|false|date|feed|\nmore junk";
+    const sep = "\x1f";
+    const raw = `some junk\nARTICLE:id${sep}title${sep}url${sep}false${sep}false${sep}date${sep}feed${sep}\nmore junk`;
     const result = parseArticles(raw);
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("id");
